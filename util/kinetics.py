@@ -60,8 +60,8 @@ class Kinetics(torch.utils.data.Dataset):
         pretrain_rand_erase_count=1,
         pretrain_rand_erase_split=False,
         rand_aug=False,
-        jitter_scales_relative=[0.5, 1.0],
-        jitter_aspect_relative=[0.75, 1.3333],
+        jitter_scales_relative=None,
+        jitter_aspect_relative=None,
     ):
         """
         Construct the Kinetics video loader with a given csv file. The format of
@@ -80,6 +80,10 @@ class Kinetics(torch.utils.data.Dataset):
                 and sample multiple clips per video.
             num_retries (int): number of retries.
         """
+        if jitter_scales_relative is None:
+            jitter_scales_relative = [0.5, 1.0]
+        if jitter_aspect_relative is None:
+            jitter_aspect_relative = [0.75, 1.3333]
         # Only support train, val, and test mode.
         assert mode in [
             "pretrain",
