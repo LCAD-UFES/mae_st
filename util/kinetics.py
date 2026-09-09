@@ -62,29 +62,13 @@ class Kinetics(torch.utils.data.Dataset):
         rand_aug=False,
         jitter_scales_relative=None,
         jitter_aspect_relative=None,
+        temporal_sample_index = 0,
+        spatial_sample_index = 1
     ):
-        """
-        Construct the Kinetics video loader with a given csv file. The format of
-        the csv file is:
-        ```
-        path_to_video_1 label_1
-        path_to_video_2 label_2
-        ...
-        path_to_video_N label_N
-        ```
-        Args:
-            mode (string): Options includes `train`, `val`, or `test` mode.
-                For the train and val mode, the data loader will take data
-                from the train or val set, and sample one clip per video.
-                For the test mode, the data loader will take data from test set,
-                and sample multiple clips per video.
-            num_retries (int): number of retries.
-        """
         if jitter_scales_relative is None:
             jitter_scales_relative = [0.5, 1.0]
         if jitter_aspect_relative is None:
             jitter_aspect_relative = [0.75, 1.3333]
-        # Only support train, val, and test mode.
         assert mode in [
             "pretrain",
             "finetune",
@@ -101,11 +85,9 @@ class Kinetics(torch.utils.data.Dataset):
 
         self.jitter_aspect_relative = jitter_aspect_relative
         self.jitter_scales_relative = jitter_scales_relative
-
-        print(
-            f"jitter_aspect_relative {jitter_aspect_relative} jitter_scales_relative {jitter_scales_relative}"
-        )
-
+        self.temporal_sample_index = temporal_sample_index
+        self.spatial_sample_index = spatial_sample_index
+        self._train_random_horizontal_flip = train_random_horizontal_flip
         self._repeat_aug = repeat_aug
         self._video_meta = {}
         self._num_retries = num_retries
@@ -113,7 +95,6 @@ class Kinetics(torch.utils.data.Dataset):
 
         self._train_jitter_scales = train_jitter_scales
         self._train_crop_size = train_crop_size
-        self._train_random_horizontal_flip = train_random_horizontal_flip
 
         self._test_num_ensemble_views = test_num_ensemble_views
         self._test_num_spatial_crops = test_num_spatial_crops
@@ -130,13 +111,6 @@ class Kinetics(torch.utils.data.Dataset):
         self._inverse_uniform_sampling = inverse_uniform_sampling
         self._use_offset_sampling = use_offset_sampling
 
-        print(self)
-        print(locals())
-
-        # For training or validation mode, one single clip is sampled from every
-        # video. For testing, NUM_ENSEMBLE_VIEWS clips are sampled from every
-        # video. For every clip, NUM_SPATIAL_CROPS is cropped spatially from
-        # the frames.
         if self.mode in ["pretrain", "finetune", "val"]:
             self._num_clips = 1
         elif self.mode in ["test"]:
@@ -154,9 +128,6 @@ class Kinetics(torch.utils.data.Dataset):
         self.temporal_gradient_rate = 0.0
 
     def _construct_loader(self):
-        """
-        Construct the video loader.
-        """
         csv_file_name = {
             "pretrain": "train",
             "finetune": "train",
@@ -192,52 +163,57 @@ class Kinetics(torch.utils.data.Dataset):
             )
         )
 
+
     def __getitem__(self, index):
-        """
-        Given the video index, return the list of frames, label, and video
-        index if the video can be fetched and decoded successfully, otherwise
-        repeatly find a random video that can be decoded as a replacement.
-        Args:
-            index (int): the video index provided by the pytorch sampler.
-        Returns:
-            frames (tensor): the frames of sampled from the video. The dimension
-                is `channel` x `num frames` x `height` x `width`.
-            label (int): the label of the current video.
-            index (int): if the video provided by pytorch sampler can be
-                decoded, then return the index of the video. If not, return the
-                index of the video replacement that can be decoded.
-        """
         if self.mode in ["pretrain", "finetune", "val"]:
-            # -1 indicates random sampling.
-            temporal_sample_index = -1
-            spatial_sample_index = -1
-            min_scale, max_scale = self._train_jitter_scales
-            crop_size = self._train_crop_size
+            # --- MODIFICADO PARA OVERFIT: Removendo aleatoriedade ---
+            # 0 = índice temporal fixo (início determinístico do vídeo) em vez de -1 (aleatório)
+            temporal_sample_index = self.temporal_sample_index
+
+            # 1 = center crop fixo em vez de -1 (recorte espacial aleatório)
+            spatial_sample_index = self.spatial_sample_index
+            # spatial_sample_index = -1
+            # --- MODIFICADO PARA OVERFIT: Removendo aleatoriedade ---
+
+            # Use o crop size específico se estiver em validação
+            if self.mode == "val" and hasattr(self, "_test_crop_size"):
+                crop_size = self._test_crop_size
+            else:
+                crop_size = self._train_crop_size
+                
+            if isinstance(crop_size, (tuple, list)):
+                min_side = min(crop_size)
+            else:
+                min_side = crop_size
+                
+            min_scale = min_side
+            max_scale = min_side
+            
         elif self.mode in ["test"]:
+            # ... resto igual
+            # ... (código existente de test) ...
             temporal_sample_index = (
                 self._spatial_temporal_idx[index] // self._test_num_spatial_crops
             )
-            # spatial_sample_index is in [0, 1, 2]. Corresponding to left,
-            # center, or right if width is larger than height, and top, middle,
-            # or bottom if height is larger than width.
             spatial_sample_index = (
                 (self._spatial_temporal_idx[index] % self._test_num_spatial_crops)
                 if self._test_num_spatial_crops > 1
                 else 1
             )
-            min_scale, max_scale, crop_size = (
-                [self._test_crop_size] * 3
+            
+            crop_size = self._test_crop_size
+            min_side = min(crop_size) if isinstance(crop_size, (tuple, list)) else crop_size
+
+            min_scale, max_scale = (
+                [min_side] * 2
                 if self._test_num_spatial_crops > 1
-                else [self._train_jitter_scales[0]] * 2 + [self._test_crop_size]
+                else [self._train_jitter_scales[0]] + [min_side]
             )
-            # The testing is deterministic and no jitter should be performed.
-            # min_scale, max_scale, and crop_size are expect to be the same.
             assert len({min_scale, max_scale}) == 1
         else:
             raise NotImplementedError("Does not support {} mode".format(self.mode))
+        
         sampling_rate = self._sampling_rate
-        # Try to decode and sample a clip from a video. If the video can not be
-        # decoded, repeatly find a random video replacement that can be decoded.
         for i_try in range(self._num_retries):
             video_container = None
             try:
@@ -251,19 +227,11 @@ class Kinetics(torch.utils.data.Dataset):
                         self._path_to_videos[index], e
                     )
                 )
-            # Select a random video if the current video was not able to access.
             if video_container is None:
-                print(
-                    "Failed to meta load video idx {} from {}; trial {}".format(
-                        index, self._path_to_videos[index], i_try
-                    )
-                )
                 if self.mode not in ["test"] and i_try > self._num_retries // 2:
-                    # let's try another one
                     index = random.randint(0, len(self._path_to_videos) - 1)
                 continue
 
-            # Decode video. Meta info is used to perform selective decoding.
             frames, fps, decode_all_video = decoder.decode(
                 video_container,
                 sampling_rate,
@@ -274,25 +242,17 @@ class Kinetics(torch.utils.data.Dataset):
                 target_fps=self._target_fps,
                 max_spatial_scale=min_scale,
                 use_offset=self._use_offset_sampling,
-                rigid_decode_all_video=self.mode in ["pretrain"],
             )
 
-            # If decoding failed (wrong format, video is too short, and etc),
-            # select another video.
             if frames is None:
-                print(
-                    "Failed to decode video idx {} from {}; trial {}".format(
-                        index, self._path_to_videos[index], i_try
-                    )
-                )
                 if self.mode not in ["test"] and i_try > self._num_retries // 2:
-                    # let's try another one
                     index = random.randint(0, len(self._path_to_videos) - 1)
                 continue
 
             frames_list = []
             label_list = []
             label = self._labels[index]
+            
             if self.rand_aug:
                 for _ in range(self._repeat_aug):
                     clip_sz = sampling_rate * self._num_frames / self._target_fps * fps
@@ -303,7 +263,6 @@ class Kinetics(torch.utils.data.Dataset):
                         self._test_num_ensemble_views if decode_all_video else 1,
                         use_offset=self._use_offset_sampling,
                     )
-                    # Perform temporal sampling from the decoded video.
                     new_frames = temporal_sampling(
                         frames, start_idx, end_idx, self._num_frames
                     )
@@ -317,7 +276,6 @@ class Kinetics(torch.utils.data.Dataset):
                     frames_list.append(new_frames)
                     label_list.append(label)
             else:
-                # T H W C -> C T H W.
                 for _ in range(self._repeat_aug):
                     clip_sz = sampling_rate * self._num_frames / self._target_fps * fps
                     start_idx, end_idx = get_start_end_idx(
@@ -327,7 +285,6 @@ class Kinetics(torch.utils.data.Dataset):
                         self._test_num_ensemble_views if decode_all_video else 1,
                         use_offset=self._use_offset_sampling,
                     )
-                    # Perform temporal sampling from the decoded video.
                     new_frames = temporal_sampling(
                         frames, start_idx, end_idx, self._num_frames
                     )
@@ -336,7 +293,7 @@ class Kinetics(torch.utils.data.Dataset):
                         new_frames, self._mean, self._std
                     )
                     new_frames = new_frames.permute(3, 0, 1, 2)
-
+                    
                     scl, asp = (
                         self.jitter_scales_relative,
                         self.jitter_aspect_relative,
@@ -352,7 +309,6 @@ class Kinetics(torch.utils.data.Dataset):
                         else asp
                     )
 
-                    # Perform data augmentation.
                     new_frames = utils.spatial_sampling(
                         new_frames,
                         spatial_idx=spatial_sample_index,
@@ -390,7 +346,6 @@ class Kinetics(torch.utils.data.Dataset):
             auto_augment=self.aa_type,
             interpolation="bicubic",
         )
-        # T H W C -> T C H W.
         frames = frames.permute(0, 3, 1, 2)
         list_img = self._frame_to_list_img(frames)
         list_img = aug_transform(list_img)
@@ -402,9 +357,7 @@ class Kinetics(torch.utils.data.Dataset):
             (0.45, 0.45, 0.45),
             (0.225, 0.225, 0.225),
         )
-        # T H W C -> C T H W.
         frames = frames.permute(3, 0, 1, 2)
-        # Perform data augmentation.
         scl, asp = (
             self.jitter_scales_relative,
             self.jitter_aspect_relative,
@@ -425,7 +378,7 @@ class Kinetics(torch.utils.data.Dataset):
             min_scale=min_scale,
             max_scale=max_scale,
             crop_size=crop_size,
-            random_horizontal_flip=self.pretrain_rand_flip,
+            random_horizontal_flip=self._train_random_horizontal_flip,
             inverse_uniform_sampling=False,
             aspect_ratio=relative_aspect,
             scale=relative_scales,
@@ -455,16 +408,8 @@ class Kinetics(torch.utils.data.Dataset):
         return torch.stack(img_list)
 
     def __len__(self):
-        """
-        Returns:
-            (int): the number of videos in the dataset.
-        """
         return self.num_videos
 
     @property
     def num_videos(self):
-        """
-        Returns:
-            (int): the number of videos in the dataset.
-        """
         return len(self._path_to_videos)

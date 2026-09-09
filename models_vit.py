@@ -180,8 +180,9 @@ class VisionTransformer(nn.Module):
 
 
 def vit_base_patch16(**kwargs):
+    patch_size = kwargs.pop("patch_size", 16)
     model = VisionTransformer(
-        patch_size=16,
+        patch_size=patch_size,
         embed_dim=768,
         depth=12,
         num_heads=12,
@@ -193,8 +194,9 @@ def vit_base_patch16(**kwargs):
 
 
 def vit_large_patch16(**kwargs):
+    patch_size = kwargs.pop("patch_size", 16)
     model = VisionTransformer(
-        patch_size=16,
+        patch_size=patch_size,
         embed_dim=1024,
         depth=24,
         num_heads=16,
@@ -206,8 +208,9 @@ def vit_large_patch16(**kwargs):
 
 
 def vit_huge_patch14(**kwargs):
+    patch_size = kwargs.pop("patch_size", 14)
     model = VisionTransformer(
-        patch_size=16,
+        patch_size=patch_size,
         embed_dim=1280,
         depth=32,
         num_heads=16,

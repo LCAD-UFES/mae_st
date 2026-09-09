@@ -99,7 +99,7 @@ def spatial_sampling(
             than width.
         min_scale (int): the minimal size of scaling.
         max_scale (int): the maximal size of scaling.
-        crop_size (int): the size of height and width used to crop the
+        crop_size (int or tuple): the size of height and width used to crop the
             frames.
         inverse_uniform_sampling (bool): if True, sample uniformly in
             [1 / max_scale, 1 / min_scale] and take a reciprocal to get the
@@ -111,6 +111,12 @@ def spatial_sampling(
     Returns:
         frames (tensor): spatially sampled frames.
     """
+    
+    if isinstance(crop_size, (tuple, list)):
+        target_height, target_width = crop_size[0], crop_size[1]
+    else:
+        target_height, target_width = crop_size, crop_size
+
     assert spatial_idx in [-1, 0, 1, 2]
     if spatial_idx == -1:
         if aspect_ratio is None and scale is None:
@@ -119,8 +125,9 @@ def spatial_sampling(
                 min_size=min_scale,
                 max_size=max_scale,
                 inverse_uniform_sampling=inverse_uniform_sampling,
+                target_size=(target_height, target_width)  # <- INSERIDO AQUI
             )
-            frames = transform.random_crop(frames, crop_size)
+            frames = transform.random_crop(frames, (target_height, target_width))
         else:
             transform_func = (
                 transform.random_resized_crop_with_shift
@@ -129,19 +136,19 @@ def spatial_sampling(
             )
             frames = transform_func(
                 images=frames,
-                target_height=crop_size,
-                target_width=crop_size,
+                target_height=target_height,
+                target_width=target_width,
                 scale=scale,
                 ratio=aspect_ratio,
             )
         if random_horizontal_flip:
             frames = transform.horizontal_flip(0.5, frames)
     else:
-        # The testing is deterministic and no jitter should be performed.
-        # min_scale, max_scale, and crop_size are expect to be the same.
         assert len({min_scale, max_scale}) == 1
-        frames = transform.random_short_side_scale_jitter(frames, min_scale, max_scale)
-        frames = transform.uniform_crop(frames, crop_size, spatial_idx)
+        frames = transform.random_short_side_scale_jitter(
+            frames, min_scale, max_scale, target_size=(target_height, target_width) # <- INSERIDO AQUI
+        )
+        frames = transform.uniform_crop(frames, (target_height, target_width), spatial_idx)
     return frames
 
 

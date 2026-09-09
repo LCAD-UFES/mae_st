@@ -65,7 +65,21 @@ def get_args_parser():
         help="Name of model to train",
     )
 
-    parser.add_argument("--input_size", default=224, type=int, help="images input size")
+    parser.add_argument(
+        "--input_size", 
+        default=[224, 224], 
+        type=int, 
+        nargs="+", 
+        help="images input size (H, W)"
+    )
+
+    parser.add_argument(
+        "--patch_size", 
+        default=[16, 16], 
+        type=int, 
+        nargs="+", 
+        help="patch size (p_h, p_w)"
+    )
 
     parser.add_argument(
         "--dropout",
@@ -320,11 +334,19 @@ def main(args):
 
     cudnn.benchmark = True
 
+    if isinstance(args.input_size, list):
+        args.input_size = tuple(args.input_size) if len(args.input_size) > 1 else (args.input_size[0], args.input_size[0])
+    
+    if isinstance(args.patch_size, list):
+        args.patch_size = tuple(args.patch_size) if len(args.patch_size) > 1 else (args.patch_size[0], args.patch_size[0])
+
+
     dataset_train = Kinetics(
         mode="finetune",
         path_to_data_dir=args.path_to_data_dir,
         sampling_rate=args.sampling_rate,
         num_frames=args.num_frames,
+        train_crop_size=args.input_size,
         train_jitter_scales=(256, 320),
         repeat_aug=args.repeat_aug,
         pretrain_rand_erase_prob=args.reprob,
@@ -341,6 +363,7 @@ def main(args):
         path_to_data_dir=args.path_to_data_dir,
         sampling_rate=args.sampling_rate,
         num_frames=args.num_frames,
+        test_crop_size=args.input_size,
         train_jitter_scales=(256, 320),
         jitter_aspect_relative=args.jitter_aspect_relative,
         jitter_scales_relative=args.jitter_scales_relative,
@@ -412,6 +435,7 @@ def main(args):
         )
 
     model = models_vit.__dict__[args.model](
+        img_size=args.input_size,
         **vars(args),
     )
 
